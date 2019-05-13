@@ -7,11 +7,24 @@
 #include "proc.h"
 #include "spinlock.h"
 
+#define NTHREAD 5
+
 struct
 {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
+
+struct
+{
+  struct spinlock lock;
+  struct proc thread[NTHREAD];
+} threadPool;
+
+void tinit(void)
+{
+  initlock(&ptable.lock, "threadPool");
+}
 
 static struct proc *initproc;
 
@@ -92,6 +105,52 @@ found:
   p->pid = nextpid++;
 
   release(&ptable.lock);
+
+  // Allocate kernel stack.
+  if ((p->kstack = kalloc()) == 0)
+  {
+    p->state = UNUSED;
+    return 0;
+  }
+  sp = p->kstack + KSTACKSIZE;
+
+  // Leave room for trap frame.
+  sp -= sizeof *p->tf;
+  p->tf = (struct trapframe *)sp;
+
+  // Set up new context to start executing at forkret,
+  // which returns to trapret.
+  sp -= 4;
+  *(uint *)sp = (uint)trapret;
+
+  sp -= sizeof *p->context;
+  p->context = (struct context *)sp;
+  memset(p->context, 0, sizeof *p->context);
+  p->context->eip = (uint)forkret;
+
+  return p;
+}
+
+static struct proc *
+allocthread(void)
+{
+  struct proc *p;
+  char *sp;
+
+  acquire(&threadPool.lock);
+
+  for (p = threadPool.thread; p < &threadPool.thread[NTHREAD]; p++)
+    if (p->state == UNUSED)
+      goto found;
+
+  release(&threadPool.lock);
+  return 0;
+
+found:
+  p->state = EMBRYO;
+  p->pid = nextpid++;
+
+  release(&threadPool.lock);
 
   // Allocate kernel stack.
   if ((p->kstack = kalloc()) == 0)
@@ -638,38 +697,39 @@ int clone(void (*fcn)(void *), void *arg, void *stack)
   np->cwd = idup(proc->cwd);
 
   safestrcpy(np->name, proc->name, sizeof(proc->name));
-  
+
   pid = np->pid;
   acquire(&ptable.lock);
   np->state = RUNNABLE;
   release(&ptable.lock);
-
 
   np->reference_count = proc->reference_count;
   *(np->reference_count) = *(np->reference_count) + 1;
   return pid;
 }
 
-
-int
-join(void** stack)
+int join(void **stack)
 {
-  if ((uint) stack + sizeof(uint) > (proc->sz)) {
+  if ((uint)stack + sizeof(uint) > (proc->sz))
+  {
     return -1;
   }
-  
+
   struct proc *p;
   int havekids, pid;
 
   acquire(&ptable.lock);
-  for(;;){
+  for (;;)
+  {
     // Scan through table looking for zombie children.
     havekids = 0;
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->parent != proc || p->pgdir != proc->pgdir)
+    for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    {
+      if (p->parent != proc || p->pgdir != proc->pgdir)
         continue;
       havekids = 1;
-      if(p->state == ZOMBIE){
+      if (p->state == ZOMBIE)
+      {
         // Found one.
         *stack = p->ustack;
         pid = p->pid;
@@ -687,12 +747,13 @@ join(void** stack)
     }
 
     // No point waiting if we don't have any children.
-    if(!havekids || proc->killed){
+    if (!havekids || proc->killed)
+    {
       release(&ptable.lock);
       return -1;
     }
 
     // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(proc, &ptable.lock);  //DOC: wait-sleep
+    sleep(proc, &ptable.lock); //DOC: wait-sleep
   }
 }
