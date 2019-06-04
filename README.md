@@ -1,2 +1,2 @@
 # 2nd phase of OS project
-Using threads and locks, implement multi-threading  and handle synchronization in xv6.
+Implement threads, using locks, and handle synchronization in xv6.
